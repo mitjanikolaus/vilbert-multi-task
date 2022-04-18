@@ -20,6 +20,8 @@ from maskrcnn_benchmark.modeling.detector import build_detection_model
 from maskrcnn_benchmark.structures.image_list import to_image_list
 from maskrcnn_benchmark.utils.model_serialization import load_state_dict
 
+import multiprocessing
+from multiprocessing import Process
 
 class FeatureExtractor:
     MAX_SIZE = 1333
@@ -81,7 +83,7 @@ class FeatureExtractor:
 
         load_state_dict(model, checkpoint.pop("model"))
 
-        model.to("cuda")
+        #model.to("cuda")
         model.eval()
         return model
 
@@ -183,10 +185,10 @@ class FeatureExtractor:
         # Image dimensions should be divisible by 32, to allow convolutions
         # in detector to work
         current_img_list = to_image_list(img_tensor, size_divisible=32)
-        current_img_list = current_img_list.to("cuda")
+        #current_img_list = current_img_list.to("cuda")
 
         with torch.no_grad():
-            output = self.detection_model(current_img_list)
+            output = self.extract_feat_in_process(current_img_list)
 
         feat_list = self._process_feature_extraction(
             output,
@@ -197,6 +199,18 @@ class FeatureExtractor:
         )
 
         return feat_list
+
+    def extract_feat_in_process(self, img_list):
+        manager = multiprocessing.Manager()
+        return_dict = manager.dict()
+
+        def worker_process(return_dic, images):
+            output = self.detection_model(images)
+            return_dic["feat"] = output
+        p = Process(target=worker_process, args=(return_dict, img_list))
+        p.start()
+        p.join()
+        return return_dict["feat"]
 
     def _chunks(self, array, chunk_size):
         for i in range(0, len(array), chunk_size):
@@ -218,15 +232,24 @@ class FeatureExtractor:
             self._save_feature(image_dir, features[0], infos[0])
         else:
             files = glob.glob(os.path.join(image_dir, "*"))
-            # files = sorted(files)
+            files = sorted(files)
+            print("Total: ", len(files))
+            files_not_processed = []
+            files_already_processed = [os.path.basename(filename).replace(".npy",".jpg") for filename in glob.glob(os.path.join(self.args.output_folder, "*.npy"))]
+            for filename in files:
+                if not os.path.basename(filename) in files_already_processed:
+                    files_not_processed.append(filename)
+            files = files_not_processed
+            print(f"Extracting features of {len(files)} files")
             # files = [files[i: i+1000] for i in range(0, len(files), 1000)][self.args.partition]
-            for chunk in self._chunks(files, self.args.batch_size):
-                try:
-                    features, infos = self.get_detectron_features(chunk)
-                    for idx, file_name in enumerate(chunk):
-                        self._save_feature(file_name, features[idx], infos[idx])
-                except BaseException:
-                    continue
+            for e, chunk in enumerate(self._chunks(files, self.args.batch_size)):
+                
+                features, infos = self.get_detectron_features(chunk)
+                print(e)
+                for idx, file_name in enumerate(chunk):
+                    self._save_feature(file_name, features[idx], infos[idx])
+                del features
+                del infos
 
 
 if __name__ == "__main__":
