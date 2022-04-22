@@ -9,7 +9,7 @@ from setuptools import setup
 
 
 setup(
-    name="vilbert_multi_task",
+    name="vilbert",
     version="0.1.0",
     author="Jiasen Lu, Vedanuj Goswami",
     description="",
